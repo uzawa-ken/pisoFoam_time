@@ -37,17 +37,17 @@
         // assemble matrix
         cpuTime __tAsm1;
 
-///------ A_p * p = b_p
+        ///------ A_p * p = b_p
         fvScalarMatrix pEqn
         (
             fvm::laplacian(rAU, p) == fvc::div(phiHbyA)
         );
         pEqn.setReference(pRefCell, pRefValue);
-///------
+        ///------
 
         accPEqnAsm += __tAsm1.elapsedCpuTime();
 
-///============
+        ///============
         const bool doGnnWrite =
             writePressureSystem
          && piso.finalNonOrthogonalIter()
@@ -113,23 +113,73 @@
         pEqn.solve(p.select(piso.finalInnerIter()));
         accPEqnSol += __tSol.elapsedCpuTime();
 
-        // 解ベクトル x を出力
+        // 解ベクトル x と「真の残差 r = A_full x - b」を出力
         if (doGnnWrite)
         {
             const scalarField& x = p.internalField();
+            const scalarField& b = pEqn.source();
+            const label nCells = mesh.nCells();
 
-            fileName outDir(runTime.path()/"gnn");
-            mkDir(outDir);
-            fileName outName(outDir/("x_" + runTime.timeName() + ".dat"));
-            OFstream osX(outName);
+            // ---- x を出力
+            {
+                fileName outDir(runTime.path()/"gnn");
+                mkDir(outDir);
+                fileName outName(outDir/("x_" + runTime.timeName() + ".dat"));
+                OFstream osX(outName);
 
-            label nCells = mesh.nCells();
+                for (label i=0; i<nCells; ++i)
+                {
+                    osX << i << ' ' << x[i] << '\n';
+                }
+            }
+
+            // ---- fvScalarMatrix::residual() を使って「インターフェイス込み」の r = A x - b を取得
+            // v2412 では residual() の戻り値は tmp<Field<scalar>> = tmp<scalarField>
+            tmp<scalarField> tR = pEqn.residual();
+            const scalarField& r = tR();   // セルごとの残差 r_i（長さ nCells）
+
+            scalar sumR2  = 0.0;
+            scalar sumB2  = 0.0;
+            scalar sumAx2 = 0.0;
+            scalar maxAbsR = 0.0;
+
             for (label i=0; i<nCells; ++i)
             {
-                osX << i << ' ' << x[i] << '\n';
+                const scalar ri = r[i];
+                const scalar bi = b[i];
+                const scalar Axi = ri + bi;  // r = Ax - b → Ax = r + b
+
+                sumR2  += ri*ri;
+                sumB2  += bi*bi;
+                sumAx2 += Axi*Axi;
+                maxAbsR = Foam::max(maxAbsR, Foam::mag(ri));
+            }
+
+            const scalar normR  = Foam::sqrt(sumR2);
+            const scalar normB  = Foam::sqrt(sumB2) + SMALL;
+            const scalar normAx = Foam::sqrt(sumAx2) + SMALL;
+
+            Info<< "pEqn true(Ax-b) via residual(): "
+                << "||r||_2="        << normR
+                << ", max|r_i|="     << maxAbsR
+                << ", ||r||/||b||="  << normR/normB
+                << ", ||r||/||Ax||=" << normR/normAx
+                << nl;
+
+            // ---- セルごとの r をファイルに出力
+            {
+                fileName outDir(runTime.path()/"gnn");
+                mkDir(outDir);
+                fileName rName(outDir/("rTrue_" + runTime.timeName() + ".dat"));
+                OFstream osR(rName);
+
+                for (label i=0; i<nCells; ++i)
+                {
+                    osR << i << ' ' << r[i] << '\n';
+                }
             }
         }
-///============
+        ///============
 
         if (piso.finalNonOrthogonalIter())
         {

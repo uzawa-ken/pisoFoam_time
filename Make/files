@@ -1,0 +1,3 @@
+pisoFoam_time.C
+
+EXE = $(FOAM_APPBIN)/pisoFoam_time

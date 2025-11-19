@@ -47,6 +47,18 @@
 
         accPEqnAsm += __tAsm1.elapsedCpuTime();
 
+//
+        const label nCells = pEqn.diag().size();   // = 行数
+        const label nUpper = pEqn.upper().size();  // = 内部面の数 (下三角と同じ)
+
+        const label nnz = nCells + 2*nUpper;
+
+        Info<< "p-matrix: nCells="   << nCells
+            << "  nUpper="           << nUpper
+            << "  nnz="              << nnz
+            << nl;
+//    	
+    	
         ///============
         const bool doGnnWrite =
             writePressureSystem

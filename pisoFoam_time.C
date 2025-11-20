@@ -76,6 +76,8 @@ Description
 #include "cpuTime.H"
 #include <sstream>
 inline std::string fmt8(double x){ std::ostringstream os; os.setf(std::ios::fixed); os.precision(8); os<<x; return os.str(); }
+#include "cellQuality.H"   // skewness, nonOrthogonality 用
+
 
 // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
 

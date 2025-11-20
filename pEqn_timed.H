@@ -47,17 +47,15 @@
 
         accPEqnAsm += __tAsm1.elapsedCpuTime();
 
-//
-        const label nCells = pEqn.diag().size();   // = 行数
-        const label nUpper = pEqn.upper().size();  // = 内部面の数 (下三角と同じ)
+        // 行列サイズログ
+        const label nCellsMat = pEqn.diag().size();   // = 行数
+        const label nUpper    = pEqn.upper().size();  // = 内部面の数
+        const label nnz       = nCellsMat + 2*nUpper;
 
-        const label nnz = nCells + 2*nUpper;
-
-        Info<< "p-matrix: nCells="   << nCells
-            << "  nUpper="           << nUpper
-            << "  nnz="              << nnz
+        Info<< "p-matrix: nCellsMat=" << nCellsMat
+            << "  nUpper=" << nUpper
+            << "  nnz="    << nnz
             << nl;
-//    	
     	
         ///============
         const bool doGnnWrite =
@@ -89,37 +87,128 @@
             fileName outDir(runTime.path()/"gnn");
             mkDir(outDir);
             fileName outName(outDir/("pEqn_" + runTime.timeName() + ".dat"));
+        	
+            // メッシュサイズ
+            const label nCells = mesh.nCells();
+            const label nFaces = lowerAddr.size();
 
+            // ---------------------------------------------------------
+            // 1) cellQuality を使って「セル skewness / non-orthogonality」
+            // ---------------------------------------------------------
+            cellQuality cq(mesh);
+
+            tmp<scalarField> tCellNonOrtho = cq.nonOrthogonality();
+            const scalarField& cellNonOrtho = tCellNonOrtho();    // [deg]
+
+            tmp<scalarField> tCellSkew = cq.skewness();
+            const scalarField& cellSkew = tCellSkew();            // 無次元
+
+            // ---------------------------------------------------------
+            // 2) とりあえずの cell aspect ratio（バウンディングボックス比）
+            // ---------------------------------------------------------
+            const cellList& cells = mesh.cells();
+            const faceList& faces = mesh.faces();
+            const pointField& pts = mesh.points();
+
+            scalarField cellAspect(nCells, 1.0);
+
+            for (label celli=0; celli<nCells; ++celli)
+            {
+                const labelList& cFaces = cells[celli];
+
+                scalar minX = GREAT, maxX = -GREAT;
+                scalar minY = GREAT, maxY = -GREAT;
+                scalar minZ = GREAT, maxZ = -GREAT;
+
+                forAll(cFaces, fi)
+                {
+                    const label facei = cFaces[fi];
+                    const face& f = faces[facei];
+
+                    forAll(f, pi)
+                    {
+                        const point& p = pts[f[pi]];
+                        minX = Foam::min(minX, p.x());
+                        maxX = Foam::max(maxX, p.x());
+                        minY = Foam::min(minY, p.y());
+                        maxY = Foam::max(maxY, p.y());
+                        minZ = Foam::min(minZ, p.z());
+                        maxZ = Foam::max(maxZ, p.z());
+                    }
+                }
+
+                const scalar dx = maxX - minX;
+                const scalar dy = maxY - minY;
+                const scalar dz = maxZ - minZ;
+
+                const scalar minDim = Foam::max(SMALL, Foam::min(dx, Foam::min(dy, dz)));
+                const scalar maxDim = Foam::max(dx, Foam::max(dy, dz));
+
+                cellAspect[celli] = maxDim/minDim;   // 簡易 aspect ratio
+            }
+
+            // ---------------------------------------------------------
+            // 3) 行列 A に基づく「局所的な条件数指標」
+            // ---------------------------------------------------------
+            scalarField sumAbsOffDiag(nCells, 0.0);
+
+            for (label f = 0; f < nFaces; ++f)
+            {
+                const label own = lowerAddr[f];
+                const label nei = upperAddr[f];
+
+                const scalar a_own_nei = upper[f];   // A(own, nei)
+                const scalar a_nei_own = lower[f];   // A(nei, own)
+
+                sumAbsOffDiag[own] += Foam::mag(a_own_nei);
+                sumAbsOffDiag[nei] += Foam::mag(a_nei_own);
+            }
+
+            scalarField localCond(nCells, 1.0);
+
+            for (label i = 0; i < nCells; ++i)
+            {
+                const scalar d = Foam::mag(diag[i]) + SMALL;
+                const scalar s = sumAbsOffDiag[i];
+                // 対角支配が強ければ ~1、弱くなるほど大きくなる指標
+                localCond[i] = (d + s)/d;  // = 1 + s/|d|
+            }
+
+            // ---------------------------------------------------------
+            // 4) ファイル出力
+            // ---------------------------------------------------------
             OFstream os(outName);
-
-            label nCells = mesh.nCells();
-            label nFaces = lowerAddr.size();
 
             // --- ヘッダ：セル数と内部フェイス数
             os  << "nCells " << nCells << '\n'
                 << "nFaces " << nFaces << '\n';
 
-            // --- ノード（セル）情報：id, x, y, z, diag, b
+            // --- ノード（セル）情報：id, x, y, z, diag, b, skew, nonOrtho, aspectRatio, localCond
             os << "CELLS\n";
-            for (label i=0; i<nCells; ++i)
+            for (label i = 0; i < nCells; ++i)
             {
                 const vector& ci = C[i];
                 os  << i << ' '
                     << ci.x() << ' ' << ci.y() << ' ' << ci.z() << ' '
-                    << diag[i] << ' '
-                    << b[i] << '\n';
+                    << diag[i]        << ' '
+                    << b[i]           << ' '
+                    << cellSkew[i]    << ' '
+                    << cellNonOrtho[i]<< ' '
+                    << cellAspect[i]  << ' '
+                    << localCond[i]
+                    << '\n';
             }
 
             // --- エッジ情報：faceId, lowerCell, upperCell, lowerCoeff, upperCoeff
             os << "EDGES\n";
-            for (label f=0; f<nFaces; ++f)
+            for (label f = 0; f < nFaces; ++f)
             {
                 os  << f << ' '
                     << lowerAddr[f] << ' ' << upperAddr[f] << ' '
                     << lower[f] << ' ' << upper[f] << '\n';
             }
-        }
-
+        } // if (doGnnWrite)
+    	
         // solve
         cpuTime __tSol;
         pEqn.solve(p.select(piso.finalInnerIter()));

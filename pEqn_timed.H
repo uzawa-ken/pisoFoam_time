@@ -113,7 +113,17 @@
             // 4. 出力ファイル名（例：<case>/gnn/pEqn_0.5.dat など）
             fileName outDir(runTime.path()/"gnn");
             mkDir(outDir);
-            fileName outName(outDir/("pEqn_" + runTime.timeName() + ".dat"));
+            fileName outName
+            (
+                outDir
+              / (
+                    "pEqn_"
+                  + runTime.timeName()
+                  + "_rank" + Foam::name(Pstream::myProcNo())
+                  + ".dat"
+                )
+            );
+
         	
             // メッシュサイズ
             const label nCells = mesh.nCells();
@@ -386,8 +396,18 @@
             {
                 fileName outDir(runTime.path()/"gnn");
                 mkDir(outDir);
-                fileName outName(outDir/("x_" + runTime.timeName() + ".dat"));
-                OFstream osX(outName);
+                fileName outName
+                (
+                    outDir
+                  / (
+                        "x_"
+                      + runTime.timeName()
+                      + "_rank" + Foam::name(Pstream::myProcNo())
+                      + ".dat"
+                    )
+                );
+
+            	OFstream osX(outName);
 
                 for (label i=0; i<nCells; ++i)
                 {
@@ -432,8 +452,18 @@
             {
                 fileName outDir(runTime.path()/"gnn");
                 mkDir(outDir);
-                fileName rName(outDir/("rTrue_" + runTime.timeName() + ".dat"));
-                OFstream osR(rName);
+            	fileName rName
+            	(
+            	    outDir
+            	  / (
+            	        "rTrue_"
+            	      + runTime.timeName()
+            	      + "_rank" + Foam::name(Pstream::myProcNo())
+            	      + ".dat"
+            	    )
+            	);
+
+            	OFstream osR(rName);
 
                 for (label i=0; i<nCells; ++i)
                 {

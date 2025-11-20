@@ -234,6 +234,96 @@
                     << lowerAddr[f] << ' ' << upperAddr[f] << ' '
                     << lower[f] << ' ' << upper[f] << '\n';
             }
+
+            // ---------------------------------------------------------
+            // 5) 係数行列 A を CSR 形式で出力（各プロセスローカル）
+            //     - nRows = nCells
+            //     - nnz   = nCells (diag) + 2*nFaces (上下三角)
+            //     - 行ごとに diag + 近傍セルを詰める
+            // ---------------------------------------------------------
+            {
+                const label nRows = nCells;
+                const label nnz   = nCells + 2*nFaces;
+                fileName csrName(outDir/("A_csr_" + runTime.timeName() + ".dat"));
+                OFstream osCsr(csrName);
+
+                osCsr << "nRows " << nRows << '\n'
+                      << "nCols " << nRows << '\n'
+                      << "nnz "   << nnz   << '\n';
+
+                // 行ごとの非ゼロ数を数える（対角1 + 近傍）
+                List<label> rowNNZ(nRows, 1);   // まず対角分を1としてセット
+                for (label f = 0; f < nFaces; ++f)
+                {
+                    const label own = lowerAddr[f];
+                    const label nei = upperAddr[f];
+                    ++rowNNZ[own];
+                    ++rowNNZ[nei];
+                }
+
+                // rowPtr を prefix-sum で構成
+                List<label> rowPtr(nRows + 1, 0);
+                for (label i = 0; i < nRows; ++i)
+                {
+                    rowPtr[i+1] = rowPtr[i] + rowNNZ[i];
+                }
+
+                osCsr << "ROW_PTR\n";
+                for (label i = 0; i <= nRows; ++i)
+                {
+                    osCsr << rowPtr[i] << (i < nRows ? ' ' : '\n');
+                }
+
+                // colInd / val を埋める
+                List<label>  colInd(nnz);
+                List<scalar> val(nnz);
+
+                // 行ごとの現在書き込み位置（rowPtr のコピー）
+                List<label> rowPos(rowPtr);
+
+                // まず対角成分を追加
+                for (label i = 0; i < nRows; ++i)
+                {
+                    const label idx = rowPos[i]++;
+                    colInd[idx] = i;
+                    val[idx]    = diag[i];
+                }
+
+                // 次にオフ対角（上下三角）を追加
+                for (label f = 0; f < nFaces; ++f)
+                {
+                    const label own = lowerAddr[f];
+                    const label nei = upperAddr[f];
+
+                    // A(own, nei) = upper[f]
+                    {
+                        const label idx = rowPos[own]++;
+                        colInd[idx] = nei;
+                        val[idx]    = upper[f];
+                    }
+
+                    // A(nei, own) = lower[f]
+                    {
+                        const label idx = rowPos[nei]++;
+                        colInd[idx] = own;
+                        val[idx]    = lower[f];
+                    }
+                }
+
+                // colInd を出力
+                osCsr << "COL_IND\n";
+                for (label k = 0; k < nnz; ++k)
+                {
+                    osCsr << colInd[k] << (k+1 < nnz ? ' ' : '\n');
+                }
+
+                // 値を出力
+                osCsr << "VALUES\n";
+                for (label k = 0; k < nnz; ++k)
+                {
+                    osCsr << val[k] << (k+1 < nnz ? ' ' : '\n');
+                }
+            }        
         } // if (doGnnWrite)
     	
         // solve

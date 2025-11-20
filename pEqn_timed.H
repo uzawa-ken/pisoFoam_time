@@ -175,7 +175,7 @@
             }
 
             // ---------------------------------------------------------
-            // 3) 行列 A に基づく「局所的な条件数指標」
+        	// 3) 行列 A に基づく「offDiagRatio」＆「diagContrast」系の指標
             // ---------------------------------------------------------
             scalarField sumAbsOffDiag(nCells, 0.0);
 
@@ -191,16 +191,56 @@
                 sumAbsOffDiag[nei] += Foam::mag(a_nei_own);
             }
 
+            // --- (a) localCond（従来の 1 + Σ|off|/|diag|）も暫定的に維持        	
             scalarField localCond(nCells, 1.0);
+
+            scalarField offDiagRatio(nCells, 0.0);
 
             for (label i = 0; i < nCells; ++i)
             {
                 const scalar d = Foam::mag(diag[i]) + SMALL;
                 const scalar s = sumAbsOffDiag[i];
-                // 対角支配が強ければ ~1、弱くなるほど大きくなる指標
-                localCond[i] = (d + s)/d;  // = 1 + s/|d|
+                // offDiagRatio = Σ|off| / |diag|
+                offDiagRatio[i] = s/d;
+                // ついでに従来の localCond も出しておく（= 1 + offDiagRatio）
+                localCond[i] = 1.0 + s/d;
             }
 
+            // --- (b) diagContrast: 近傍セルの対角成分の max/min 比
+            scalarField diagMax(nCells, 0.0);
+            scalarField diagMin(nCells, GREAT);
+
+            // まず自セルで初期化
+            for (label i = 0; i < nCells; ++i)
+            {
+                const scalar d = Foam::mag(diag[i]);
+                diagMax[i] = d;
+                diagMin[i] = d;
+            }
+
+            // 近傍セル（lower/upper アドレス）を見て更新
+            for (label f = 0; f < nFaces; ++f)
+            {
+                const label own = lowerAddr[f];
+                const label nei = upperAddr[f];
+
+                const scalar dOwn = Foam::mag(diag[own]);
+                const scalar dNei = Foam::mag(diag[nei]);
+
+                diagMax[own] = Foam::max(diagMax[own], dNei);
+                diagMin[own] = Foam::min(diagMin[own], dNei);
+
+                diagMax[nei] = Foam::max(diagMax[nei], dOwn);
+                diagMin[nei] = Foam::min(diagMin[nei], dOwn);
+            }
+
+            scalarField diagContrast(nCells, 1.0);
+            for (label i = 0; i < nCells; ++i)
+            {
+                // 均一なら ~1, スケールが不均一なところほど >1
+                diagContrast[i] = diagMax[i]/(diagMin[i] + SMALL);
+            }
+        	
             // ---------------------------------------------------------
             // 4) ファイル出力
             // ---------------------------------------------------------
@@ -210,8 +250,10 @@
             os  << "nCells " << nCells << '\n'
                 << "nFaces " << nFaces << '\n';
 
-            // --- ノード（セル）情報：id, x, y, z, diag, b, skew, nonOrtho, aspectRatio, localCond
-            os << "CELLS\n";
+            // --- ノード（セル）情報：
+            // id, x, y, z, diag, b, skew, nonOrtho, aspectRatio,
+            // localCond, diagContrast, offDiagRatio
+        	os << "CELLS\n";
             for (label i = 0; i < nCells; ++i)
             {
                 const vector& ci = C[i];
@@ -222,8 +264,10 @@
                     << cellSkew[i]    << ' '
                     << cellNonOrtho[i]<< ' '
                     << cellAspect[i]  << ' '
-                    << localCond[i]
-                    << '\n';
+                    << localCond[i]   << ' '
+                    << diagContrast[i]<< ' '
+                    << offDiagRatio[i]
+            	    << '\n';
             }
 
             // --- エッジ情報：faceId, lowerCell, upperCell, lowerCoeff, upperCoeff

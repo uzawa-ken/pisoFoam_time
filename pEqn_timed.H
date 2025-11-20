@@ -47,7 +47,8 @@
 
         accPEqnAsm += __tAsm1.elapsedCpuTime();
 
-        // 行列サイズログ
+/*
+    	// 行列サイズログ
         const label nCellsMat = pEqn.diag().size();   // = 行数
         const label nUpper    = pEqn.upper().size();  // = 内部面の数
         const label nnz       = nCellsMat + 2*nUpper;
@@ -55,6 +56,32 @@
         Info<< "p-matrix: nCellsMat=" << nCellsMat
             << "  nUpper=" << nUpper
             << "  nnz="    << nnz
+            << nl;
+*/
+        // ローカル
+        const label nCellsLocal = pEqn.diag().size();
+        const label nUpperLocal = pEqn.upper().size();
+        const label nnzLocal    = nCellsLocal + 2*nUpperLocal;
+
+        // グローバル合計（sum）
+        const label nCellsGlobal = returnReduce(nCellsLocal, sumOp<label>());
+        const label nUpperGlobal = returnReduce(nUpperLocal, sumOp<label>());
+        const label nnzGlobal    = returnReduce(nnzLocal,   sumOp<label>());
+
+        // master だけに全体を出す
+        if (Pstream::master())
+        {
+            Info<< "p-matrix global: nCells=" << nCellsGlobal
+                << "  nUpper=" << nUpperGlobal
+                << "  nnz="    << nnzGlobal
+                << nl;
+        }
+
+        // 各ランクごとの値はさっきの Pout で
+        Pout<< "p-matrix(proc " << Pstream::myProcNo() << "): "
+            << "nCellsMat=" << nCellsLocal
+            << "  nUpper="  << nUpperLocal
+            << "  nnz="     << nnzLocal
             << nl;
     	
         ///============

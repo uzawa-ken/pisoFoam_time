@@ -185,38 +185,8 @@
             }
 
             // ---------------------------------------------------------
-        	// 3) 行列 A に基づく「offDiagRatio」＆「diagContrast」系の指標
+            // 3) diagContrast: 近傍セルの対角成分の max/min 比
             // ---------------------------------------------------------
-            scalarField sumAbsOffDiag(nCells, 0.0);
-
-            for (label f = 0; f < nFaces; ++f)
-            {
-                const label own = lowerAddr[f];
-                const label nei = upperAddr[f];
-
-                const scalar a_own_nei = upper[f];   // A(own, nei)
-                const scalar a_nei_own = lower[f];   // A(nei, own)
-
-                sumAbsOffDiag[own] += Foam::mag(a_own_nei);
-                sumAbsOffDiag[nei] += Foam::mag(a_nei_own);
-            }
-
-            // --- (a) localCond（従来の 1 + Σ|off|/|diag|）も暫定的に維持        	
-            scalarField localCond(nCells, 1.0);
-
-            scalarField offDiagRatio(nCells, 0.0);
-
-            for (label i = 0; i < nCells; ++i)
-            {
-                const scalar d = Foam::mag(diag[i]) + SMALL;
-                const scalar s = sumAbsOffDiag[i];
-                // offDiagRatio = Σ|off| / |diag|
-                offDiagRatio[i] = s/d;
-                // ついでに従来の localCond も出しておく（= 1 + offDiagRatio）
-                localCond[i] = 1.0 + s/d;
-            }
-
-            // --- (b) diagContrast: 近傍セルの対角成分の max/min 比
             scalarField diagMax(nCells, 0.0);
             scalarField diagMin(nCells, GREAT);
 
@@ -252,9 +222,40 @@
             }
         	
             // ---------------------------------------------------------
-            // 4) ファイル出力
+            // 4) セル体積に基づく代表長さとサイズジャンプ
             // ---------------------------------------------------------
-            OFstream os(outName);
+            const scalarField& V = mesh.V();
+            scalarField cellSize(nCells, 0.0);
+
+            for (label celli = 0; celli < nCells; ++celli)
+            {
+                // 代表長さ h_i ≒ V_i^(1/3)
+                cellSize[celli] = Foam::pow(V[celli], 1.0/3.0);
+            }
+
+            // 隣接セルとのサイズジャンプ:
+            //   sizeJump_i = max_j max(h_i/h_j, h_j/h_i)
+            scalarField sizeJump(nCells, 1.0);
+
+            for (label f = 0; f < nFaces; ++f)
+            {
+                const label own = lowerAddr[f];
+                const label nei = upperAddr[f];
+
+                const scalar hi = cellSize[own];
+                const scalar hj = cellSize[nei];
+
+                scalar ratio = hi/(hj + VSMALL);
+                if (ratio < 1.0) ratio = 1.0/ratio;
+
+                sizeJump[own] = Foam::max(sizeJump[own], ratio);
+                sizeJump[nei] = Foam::max(sizeJump[nei], ratio);
+            }
+
+            // ---------------------------------------------------------
+            // 5) ファイル出力
+            // ---------------------------------------------------------
+        	OFstream os(outName);
 
             // --- ヘッダ：セル数と内部フェイス数
             os  << "nCells " << nCells << '\n'
@@ -262,7 +263,7 @@
 
             // --- ノード（セル）情報：
             // id, x, y, z, diag, b, skew, nonOrtho, aspectRatio,
-            // localCond, diagContrast, offDiagRatio
+            // diagContrast, cellSize, sizeJump
         	os << "CELLS\n";
             for (label i = 0; i < nCells; ++i)
             {
@@ -274,10 +275,10 @@
                     << cellSkew[i]    << ' '
                     << cellNonOrtho[i]<< ' '
                     << cellAspect[i]  << ' '
-                    << localCond[i]   << ' '
                     << diagContrast[i]<< ' '
-                    << offDiagRatio[i]
-            	    << '\n';
+                    << cellSize[i]    << ' '
+                    << sizeJump[i]
+            	<< '\n';
             }
 
             // --- エッジ情報：faceId, lowerCell, upperCell, lowerCoeff, upperCoeff

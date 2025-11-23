@@ -276,7 +276,8 @@
                     << cellNonOrtho[i]<< ' '
                     << cellAspect[i]  << ' '
                     << diagContrast[i]<< ' '
-                    << cellSize[i]    << ' '
+                    << V[i]           << ' '      // ★ ここが追加
+            	    << cellSize[i]    << ' '
                     << sizeJump[i]
             	<< '\n';
             }

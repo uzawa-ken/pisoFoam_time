@@ -474,12 +474,67 @@
         }
         ///============
 
+/// div flux
         if (piso.finalNonOrthogonalIter())
         {
             cpuTime __tAsm2;
             phi = phiHbyA - pEqn.flux();
             accPEqnAsm += __tAsm2.elapsedCpuTime();
+
+            // ===== ここから：セル間フラックス発散を出力 =====
+            if (doGnnWrite)
+            {
+                // phiHbyA: 予測フラックス（u* に対応）
+                // phi    : 圧力修正後フラックス（最終 U に対応）
+
+                // OpenFOAM の離散スキームそのままの fvc::div を使う
+                tmp<volScalarField> tDivPhiHbyA = fvc::div(phiHbyA);
+                const scalarField& divPhiHbyA =
+                    tDivPhiHbyA().internalField();   // 各セルの ∇·(u*)
+
+                tmp<volScalarField> tDivPhi = fvc::div(phi);
+                const scalarField& divPhi =
+                    tDivPhi().internalField();       // 各セルの ∇·u^(n+1)
+
+                const scalarField& V = mesh.V();
+                const label nCells = mesh.nCells();
+
+                fileName outDir(runTime.path()/"gnn");
+                mkDir(outDir);
+
+                // 例: divPhi_10_rank7.dat
+                fileName divName
+                (
+                    outDir
+                  / (
+                        "divPhi_"
+                      + runTime.timeName()
+                      + "_rank" + Foam::name(Pstream::myProcNo())
+                      + ".dat"
+                    )
+                );
+
+                OFstream osDiv(divName);
+
+                // フォーマット:
+                //   cellId  divPhiHbyA  divPhi  volume
+                //   0       ...         ...     ...
+                //   1       ...         ...     ...
+                //   ...
+                for (label i=0; i<nCells; ++i)
+                {
+                    osDiv
+                        << i << ' '
+                        << divPhiHbyA[i] << ' '
+                        << divPhi[i]     << ' '
+                        << V[i]
+                        << '\n';
+                }
+            }
+            // ===== ここまで：セル間フラックス発散を出力 =====
         }
+///
+    	
     }
 
     // ===== continuityErrs + 速度補正（assemble 側に加算） ===================

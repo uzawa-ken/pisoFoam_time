@@ -130,6 +130,36 @@
             const label nFaces = lowerAddr.size();
 
             // ---------------------------------------------------------
+            // (NEW) 壁近傍フラグ isWallCell を構築
+            //   - 各 wall パッチに隣接するセルを 1.0、それ以外を 0.0 とする
+            // ---------------------------------------------------------
+            scalarField isWallCell(nCells, 0.0);
+
+            const fvBoundaryMesh& fvb = mesh.boundary();
+            const polyBoundaryMesh& pbm = mesh.boundaryMesh();
+
+            forAll(fvb, patchi)
+            {
+                const fvPatch& fvp = fvb[patchi];
+
+                // fvPatch type が "wall" のものだけを壁として扱う
+                if (fvp.type() == "wall")
+                {
+                    const polyPatch& pp = pbm[patchi];
+                    const labelList& faceCells = pp.faceCells();
+
+                    forAll(faceCells, i)
+                    {
+                        const label celli = faceCells[i];
+                        if (celli >= 0 && celli < nCells)
+                        {
+                            isWallCell[celli] = 1.0;
+                        }
+                    }
+                }
+            }
+
+            // ---------------------------------------------------------
             // 1) cellQuality を使って「セル skewness / non-orthogonality」
             // ---------------------------------------------------------
             cellQuality cq(mesh);
@@ -264,7 +294,7 @@
             // --- ノード（セル）情報：
             // id, x, y, z, diag, b, skew, nonOrtho, aspectRatio,
             // diagContrast, cellSize, sizeJump
-        	os << "CELLS\n";
+            os << "CELLS\n";
             for (label i = 0; i < nCells; ++i)
             {
                 const vector& ci = C[i];
@@ -276,10 +306,11 @@
                     << cellNonOrtho[i]<< ' '
                     << cellAspect[i]  << ' '
                     << diagContrast[i]<< ' '
-                    << V[i]           << ' '      // ★ ここが追加
-            	    << cellSize[i]    << ' '
-                    << sizeJump[i]
-            	<< '\n';
+                    << V[i]           << ' '
+                    << cellSize[i]    << ' '
+                    << sizeJump[i]    << ' '
+                    << isWallCell[i]  // (NEW) 壁近傍フラグ (0.0 or 1.0)
+                    << '\n';
             }
 
             // --- エッジ情報：faceId, lowerCell, upperCell, lowerCoeff, upperCoeff
@@ -289,6 +320,49 @@
                 os  << f << ' '
                     << lowerAddr[f] << ' ' << upperAddr[f] << ' '
                     << lower[f] << ' ' << upper[f] << '\n';
+            }
+
+            // ---------------------------------------------------------
+            // (NEW) 壁境界フェイス情報の出力
+            //   セクション名: WALL_FACES
+            //   フォーマット:
+            //     patchIndex  patchName  localFaceId  globalFaceId  ownerCell
+            //     cx  cy  cz  Sfx  Sfy  Sfz
+            // ---------------------------------------------------------
+            os << "WALL_FACES\n";
+
+            const vectorField& Cf = mesh.Cf();
+            const vectorField& Sf = mesh.Sf();
+
+            forAll(fvb, patchi)
+            {
+                const fvPatch& fvp = fvb[patchi];
+
+                if (fvp.type() == "wall")
+                {
+                    const polyPatch& pp       = pbm[patchi];
+                    const label      start    = pp.start();
+                    const label      size     = pp.size();
+                    const labelList& faceCells = pp.faceCells();
+                    const word&      patchName = fvp.name();
+
+                    for (label i = 0; i < size; ++i)
+                    {
+                        const label faceI  = start + i;   // グローバル face index
+                        const label cellI  = faceCells[i];
+                        const vector& cf   = Cf[faceI];   // face center
+                        const vector& sf   = Sf[faceI];   // face area vector (n*|S|)
+
+                        os << patchi      << ' '   // patch index
+                           << patchName   << ' '   // patch name
+                           << i           << ' '   // local face index on the patch
+                           << faceI       << ' '   // global face index
+                           << cellI       << ' '   // owner cell
+                           << cf.x() << ' ' << cf.y() << ' ' << cf.z() << ' '
+                           << sf.x() << ' ' << sf.y() << ' ' << sf.z()
+                           << '\n';
+                    }
+                }
             }
 
             // ---------------------------------------------------------

@@ -91,6 +91,7 @@
          && (runTime.timeIndex() % gnnWriteInterval == 0);
 
         // ===== ここで A, b, 座標などをスナップショットとして出力する =====
+        // ===== ここで A, b, 座標などをスナップショットとして出力する =====
         if (doGnnWrite)
         {
             // 1. A（lduMatrix 構造）を取得
@@ -100,9 +101,9 @@
             const scalarField& lower = A.lower(); // 下三角（内部フェイスごと）
             const scalarField& upper = A.upper(); // 上三角（内部フェイスごと）
 
-            const lduAddressing& addr = A.lduAddr();
-            const labelUList& lowerAddr = addr.lowerAddr();
-            const labelUList& upperAddr = addr.upperAddr();
+            const lduAddressing& addr     = A.lduAddr();
+            const labelUList&    lowerAddr = addr.lowerAddr();
+            const labelUList&    upperAddr = addr.upperAddr();
 
             // 2. 右辺ベクトル b
             const scalarField& b = pEqn.source(); 
@@ -124,40 +125,13 @@
                 )
             );
 
-        	
             // メッシュサイズ
             const label nCells = mesh.nCells();
             const label nFaces = lowerAddr.size();
 
-            // ---------------------------------------------------------
-            // (NEW) 壁近傍フラグ isWallCell を構築
-            //   - 各 wall パッチに隣接するセルを 1.0、それ以外を 0.0 とする
-            // ---------------------------------------------------------
-            scalarField isWallCell(nCells, 0.0);
-
-            const fvBoundaryMesh& fvb = mesh.boundary();
+            // 境界メッシュ（CoCell 計算と WALL_FACES 出力用）
+            const fvBoundaryMesh&  fvb = mesh.boundary();
             const polyBoundaryMesh& pbm = mesh.boundaryMesh();
-
-            forAll(fvb, patchi)
-            {
-                const fvPatch& fvp = fvb[patchi];
-
-                // fvPatch type が "wall" のものだけを壁として扱う
-                if (fvp.type() == "wall")
-                {
-                    const polyPatch& pp = pbm[patchi];
-                    const labelList& faceCells = pp.faceCells();
-
-                    forAll(faceCells, i)
-                    {
-                        const label celli = faceCells[i];
-                        if (celli >= 0 && celli < nCells)
-                        {
-                            isWallCell[celli] = 1.0;
-                        }
-                    }
-                }
-            }
 
             // ---------------------------------------------------------
             // 1) cellQuality を使って「セル skewness / non-orthogonality」
@@ -173,9 +147,9 @@
             // ---------------------------------------------------------
             // 2) とりあえずの cell aspect ratio（バウンディングボックス比）
             // ---------------------------------------------------------
-            const cellList& cells = mesh.cells();
-            const faceList& faces = mesh.faces();
-            const pointField& pts = mesh.points();
+            const cellList&  cells = mesh.cells();
+            const faceList&  faces = mesh.faces();
+            const pointField& pts  = mesh.points();
 
             scalarField cellAspect(nCells, 1.0);
 
@@ -250,7 +224,7 @@
                 // 均一なら ~1, スケールが不均一なところほど >1
                 diagContrast[i] = diagMax[i]/(diagMin[i] + SMALL);
             }
-        	
+
             // ---------------------------------------------------------
             // 4) セル体積に基づく代表長さとサイズジャンプ
             // ---------------------------------------------------------
@@ -289,14 +263,14 @@
             scalarField CoCell(nCells, 0.0);
 
             const scalarField& phiIn = phiHbyA.internalField();
-            const auto&        phiBf = phiHbyA.boundaryField();   // ★ 型は auto に
+            const auto&        phiBf = phiHbyA.boundaryField();
 
             const label  nInternalFaces = mesh.nInternalFaces();
             const scalar deltaT         = runTime.deltaTValue();
 
             for (label celli = 0; celli < nCells; ++celli)
             {
-                const labelList& cFaces = cells[celli];   // ★ 既に定義済みの cells をそのまま使用
+                const labelList& cFaces = cells[celli];
                 scalar sumMagPhi = 0.0;
 
                 forAll(cFaces, fi)
@@ -322,11 +296,11 @@
 
                 CoCell[celli] = 0.5*sumMagPhi*deltaT/(V[celli] + VSMALL);
             }
-        	
+
             // ---------------------------------------------------------
             // 5) ファイル出力
             // ---------------------------------------------------------
-        	OFstream os(outName);
+            OFstream os(outName);
 
             // --- ヘッダ：セル数と内部フェイス数
             os  << "nCells " << nCells << '\n'
@@ -334,7 +308,7 @@
 
             // --- ノード（セル）情報：
             // id, x, y, z, diag, b, skew, nonOrtho, aspectRatio,
-            // diagContrast, cellSize, sizeJump
+            // diagContrast, cellSize, sizeJump, CoCell
             os << "CELLS\n";
             for (label i = 0; i < nCells; ++i)
             {
@@ -350,8 +324,7 @@
                     << V[i]           << ' '
                     << cellSize[i]    << ' '
                     << sizeJump[i]    << ' '
-  	                << CoCell[i]      << ' '   // ← 追加
-                    << isWallCell[i]  // (NEW) 壁近傍フラグ (0.0 or 1.0)
+                    << CoCell[i]
                     << '\n';
             }
 
@@ -365,7 +338,7 @@
             }
 
             // ---------------------------------------------------------
-            // (NEW) 壁境界フェイス情報の出力
+            // 壁境界フェイス情報の出力
             //   セクション名: WALL_FACES
             //   フォーマット:
             //     patchIndex  patchName  localFaceId  globalFaceId  ownerCell
@@ -382,9 +355,9 @@
 
                 if (fvp.type() == "wall")
                 {
-                    const polyPatch& pp       = pbm[patchi];
-                    const label      start    = pp.start();
-                    const label      size     = pp.size();
+                    const polyPatch& pp        = pbm[patchi];
+                    const label      start     = pp.start();
+                    const label      size      = pp.size();
                     const labelList& faceCells = pp.faceCells();
                     const word&      patchName = fvp.name();
 
@@ -408,7 +381,7 @@
             }
 
             // ---------------------------------------------------------
-            // 5) 係数行列 A を CSR 形式で出力（各プロセスローカル）
+            // 6) 係数行列 A を CSR 形式で出力（各プロセスローカル）
             //     - nRows = nCells
             //     - nnz   = nCells (diag) + 2*nFaces (上下三角)
             //     - 行ごとに diag + 近傍セルを詰める
@@ -495,7 +468,7 @@
                 {
                     osCsr << val[k] << (k+1 < nnz ? ' ' : '\n');
                 }
-            }        
+            }
         } // if (doGnnWrite)
     	
         // solve

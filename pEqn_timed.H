@@ -289,15 +289,14 @@
             scalarField CoCell(nCells, 0.0);
 
             const scalarField& phiIn = phiHbyA.internalField();
-            const surfaceScalarField::GeometricBoundaryField& phiBf = phiHbyA.boundaryField();
+            const auto&        phiBf = phiHbyA.boundaryField();   // ★ 型は auto に
 
-            const cellList& cells = mesh.cells();              // すでに上で定義済み
-            const label nInternalFaces = mesh.nInternalFaces();
-            const scalar deltaT = runTime.deltaTValue();
+            const label  nInternalFaces = mesh.nInternalFaces();
+            const scalar deltaT         = runTime.deltaTValue();
 
             for (label celli = 0; celli < nCells; ++celli)
             {
-                const labelList& cFaces = cells[celli];
+                const labelList& cFaces = cells[celli];   // ★ 既に定義済みの cells をそのまま使用
                 scalar sumMagPhi = 0.0;
 
                 forAll(cFaces, fi)
@@ -313,8 +312,8 @@
                     else
                     {
                         // 境界フェイス
-                        const label patchi      = pbm.whichPatch(facei);
-                        const label localFacei  = facei - pbm[patchi].start();
+                        const label patchi     = pbm.whichPatch(facei);
+                        const label localFacei = facei - pbm[patchi].start();
                         phiVal = phiBf[patchi][localFacei];
                     }
 
@@ -323,7 +322,6 @@
 
                 CoCell[celli] = 0.5*sumMagPhi*deltaT/(V[celli] + VSMALL);
             }
-
         	
             // ---------------------------------------------------------
             // 5) ファイル出力

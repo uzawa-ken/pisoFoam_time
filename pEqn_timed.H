@@ -283,6 +283,49 @@
             }
 
             // ---------------------------------------------------------
+            // 4’) セルごとのクーラン数 CoCell を計算
+            //      CoCell_i ≒ 0.5 * Δt / V_i * Σ_{faces∈cell i} |phiHbyA_face|
+            // ---------------------------------------------------------
+            scalarField CoCell(nCells, 0.0);
+
+            const scalarField& phiIn = phiHbyA.internalField();
+            const surfaceScalarField::GeometricBoundaryField& phiBf = phiHbyA.boundaryField();
+
+            const cellList& cells = mesh.cells();              // すでに上で定義済み
+            const label nInternalFaces = mesh.nInternalFaces();
+            const scalar deltaT = runTime.deltaTValue();
+
+            for (label celli = 0; celli < nCells; ++celli)
+            {
+                const labelList& cFaces = cells[celli];
+                scalar sumMagPhi = 0.0;
+
+                forAll(cFaces, fi)
+                {
+                    const label facei = cFaces[fi];
+
+                    scalar phiVal = 0.0;
+                    if (facei < nInternalFaces)
+                    {
+                        // 内部フェイス
+                        phiVal = phiIn[facei];
+                    }
+                    else
+                    {
+                        // 境界フェイス
+                        const label patchi      = pbm.whichPatch(facei);
+                        const label localFacei  = facei - pbm[patchi].start();
+                        phiVal = phiBf[patchi][localFacei];
+                    }
+
+                    sumMagPhi += Foam::mag(phiVal);
+                }
+
+                CoCell[celli] = 0.5*sumMagPhi*deltaT/(V[celli] + VSMALL);
+            }
+
+        	
+            // ---------------------------------------------------------
             // 5) ファイル出力
             // ---------------------------------------------------------
         	OFstream os(outName);
@@ -309,6 +352,7 @@
                     << V[i]           << ' '
                     << cellSize[i]    << ' '
                     << sizeJump[i]    << ' '
+  	                << CoCell[i]      << ' '   // ← 追加
                     << isWallCell[i]  // (NEW) 壁近傍フラグ (0.0 or 1.0)
                     << '\n';
             }

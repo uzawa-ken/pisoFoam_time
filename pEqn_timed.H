@@ -386,10 +386,28 @@
             //     - nnz   = nCells (diag) + 2*nFaces (上下三角)
             //     - 行ごとに diag + 近傍セルを詰める
             // ---------------------------------------------------------
+            // ---------------------------------------------------------
+            // 6) 係数行列 A を CSR 形式で出力（各プロセスローカル）
+            //     - nRows = nCells
+            //     - nnz   = nCells (diag) + 2*nFaces (上下三角)
+            //     - 行ごとに diag + 近傍セルを詰める
+            // ---------------------------------------------------------
             {
                 const label nRows = nCells;
                 const label nnz   = nCells + 2*nFaces;
-                fileName csrName(outDir/("A_csr_" + runTime.timeName() + ".dat"));
+
+                // ★ 修正: A_csr_<time>_rank<proc>.dat に出力する
+                fileName csrName
+                (
+                    outDir
+                  / (
+                        "A_csr_"
+                      + runTime.timeName()
+                      + "_rank" + Foam::name(Pstream::myProcNo())
+                      + ".dat"
+                    )
+                );
+
                 OFstream osCsr(csrName);
 
                 osCsr << "nRows " << nRows << '\n'

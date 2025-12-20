@@ -579,6 +579,213 @@
                     osR << i << ' ' << r[i] << '\n';
                 }
             }
+
+            // ---------------------------------------------------------
+            // 条件数評価用データの出力
+            //
+            // 理論的背景:
+            //   |e|/|x_true| <= kappa(A) * |r|/|b|
+            // ここで e = x_pred - x_true, r = A*x_pred - b
+            //
+            // 出力内容:
+            //   1. ゲルシュゴリンの円定理に基づく固有値境界
+            //   2. べき乗法による最大固有値推定
+            //   3. 必要なノルム
+            // ---------------------------------------------------------
+            {
+                const lduMatrix& A = pEqn;
+                const scalarField& diag  = A.diag();
+                const scalarField& lower = A.lower();
+                const scalarField& upper = A.upper();
+                const lduAddressing& addr = A.lduAddr();
+                const labelUList& lowerAddr = addr.lowerAddr();
+                const labelUList& upperAddr = addr.upperAddr();
+                const label nFacesLocal = lowerAddr.size();
+
+                // ----- ゲルシュゴリンの円定理に基づく固有値境界 -----
+                // 各行の非対角成分の絶対値和を計算
+                scalarField rowOffDiagSum(nCells, 0.0);
+
+                for (label f = 0; f < nFacesLocal; ++f)
+                {
+                    const label own = lowerAddr[f];
+                    const label nei = upperAddr[f];
+
+                    rowOffDiagSum[own] += Foam::mag(upper[f]);
+                    rowOffDiagSum[nei] += Foam::mag(lower[f]);
+                }
+
+                // ゲルシュゴリン境界: λ ∈ [a_ii - R_i, a_ii + R_i]
+                // 対称正定値行列なので固有値は正
+                scalar lambdaMinGershgorin = GREAT;
+                scalar lambdaMaxGershgorin = -GREAT;
+
+                for (label i = 0; i < nCells; ++i)
+                {
+                    const scalar d = diag[i];  // 対角成分（負値、ラプラシアン）
+                    const scalar R = rowOffDiagSum[i];
+
+                    // ポアソン行列の場合、対角成分は負（-Σ係数）
+                    // 固有値の範囲: [|d| - R, |d| + R]
+                    const scalar absD = Foam::mag(d);
+                    const scalar lambdaMin_i = Foam::max(SMALL, absD - R);
+                    const scalar lambdaMax_i = absD + R;
+
+                    lambdaMinGershgorin = Foam::min(lambdaMinGershgorin, lambdaMin_i);
+                    lambdaMaxGershgorin = Foam::max(lambdaMaxGershgorin, lambdaMax_i);
+                }
+
+                // 条件数の上界（ゲルシュゴリン推定）
+                const scalar kappaGershgorin = lambdaMaxGershgorin / (lambdaMinGershgorin + SMALL);
+
+                // ----- べき乗法による最大固有値推定 -----
+                // A*v を計算する関数（lduMatrix構造を使用）
+                // 注: OpenFOAMのラプラシアン行列は -div(grad) なので負定値
+                //     固有値評価のため絶対値を使う
+
+                const label powerIterMax = 30;
+                const scalar powerIterTol = 1e-4;
+
+                scalarField v(nCells, 1.0/Foam::sqrt(scalar(nCells)));
+                scalarField Av(nCells, 0.0);
+                scalar lambdaMaxPower = 0.0;
+
+                for (label iter = 0; iter < powerIterMax; ++iter)
+                {
+                    // Av = A * v （行列ベクトル積）
+                    Av = 0.0;
+
+                    // 対角成分
+                    for (label i = 0; i < nCells; ++i)
+                    {
+                        Av[i] = diag[i] * v[i];
+                    }
+
+                    // 非対角成分
+                    for (label f = 0; f < nFacesLocal; ++f)
+                    {
+                        const label own = lowerAddr[f];
+                        const label nei = upperAddr[f];
+
+                        Av[own] += upper[f] * v[nei];
+                        Av[nei] += lower[f] * v[own];
+                    }
+
+                    // レイリー商: λ ≈ (v^T A v) / (v^T v)
+                    // ただし |Av| を使って正の固有値として扱う
+                    scalar vTAv = 0.0;
+                    scalar vTv = 0.0;
+                    for (label i = 0; i < nCells; ++i)
+                    {
+                        vTAv += v[i] * Av[i];
+                        vTv += v[i] * v[i];
+                    }
+                    const scalar lambdaNew = Foam::mag(vTAv) / (vTv + SMALL);
+
+                    // 収束判定
+                    if (iter > 0 && Foam::mag(lambdaNew - lambdaMaxPower) / (lambdaMaxPower + SMALL) < powerIterTol)
+                    {
+                        lambdaMaxPower = lambdaNew;
+                        break;
+                    }
+                    lambdaMaxPower = lambdaNew;
+
+                    // ベクトルの正規化: v = Av / |Av|
+                    scalar normAv = 0.0;
+                    for (label i = 0; i < nCells; ++i)
+                    {
+                        normAv += Av[i] * Av[i];
+                    }
+                    normAv = Foam::sqrt(normAv) + SMALL;
+
+                    for (label i = 0; i < nCells; ++i)
+                    {
+                        v[i] = Av[i] / normAv;
+                    }
+                }
+
+                // ----- 対角スケーリング後の条件数推定 -----
+                // D^(-1/2) A D^(-1/2) の条件数（対角前処理後）
+                scalar diagMin = GREAT;
+                scalar diagMax = -GREAT;
+                for (label i = 0; i < nCells; ++i)
+                {
+                    const scalar absD = Foam::mag(diag[i]);
+                    diagMin = Foam::min(diagMin, absD);
+                    diagMax = Foam::max(diagMax, absD);
+                }
+                const scalar diagRatio = diagMax / (diagMin + SMALL);
+
+                // ----- ノルム計算 -----
+                // |x_true|_2
+                scalar sumX2 = 0.0;
+                for (label i = 0; i < nCells; ++i)
+                {
+                    sumX2 += x[i] * x[i];
+                }
+                const scalar normXtrue = Foam::sqrt(sumX2) + SMALL;
+
+                // ----- 出力 -----
+                fileName outDir(runTime.path()/"gnn");
+                mkDir(outDir);
+                fileName condName
+                (
+                    outDir
+                  / (
+                        "conditionEval_"
+                      + runTime.timeName()
+                      + "_rank" + Foam::name(Pstream::myProcNo())
+                      + ".dat"
+                    )
+                );
+
+                OFstream osCond(condName);
+
+                osCond << "# Condition number evaluation data\n";
+                osCond << "# |e|/|x_true| <= kappa(A) * |r|/|b|\n";
+                osCond << "#\n";
+                osCond << "nCells " << nCells << '\n';
+                osCond << '\n';
+
+                osCond << "# Gershgorin bounds (eigenvalue estimates)\n";
+                osCond << "lambda_min_gershgorin " << lambdaMinGershgorin << '\n';
+                osCond << "lambda_max_gershgorin " << lambdaMaxGershgorin << '\n';
+                osCond << "kappa_gershgorin " << kappaGershgorin << '\n';
+                osCond << '\n';
+
+                osCond << "# Power iteration estimate (max eigenvalue)\n";
+                osCond << "lambda_max_power " << lambdaMaxPower << '\n';
+                osCond << '\n';
+
+                osCond << "# Diagonal scaling info\n";
+                osCond << "diag_min " << diagMin << '\n';
+                osCond << "diag_max " << diagMax << '\n';
+                osCond << "diag_ratio " << diagRatio << '\n';
+                osCond << '\n';
+
+                osCond << "# Norms for error bound evaluation\n";
+                osCond << "norm_b " << normB << '\n';
+                osCond << "norm_x_true " << normXtrue << '\n';
+                osCond << "norm_r " << normR << '\n';
+                osCond << "max_abs_r " << maxAbsR << '\n';
+                osCond << '\n';
+
+                osCond << "# Relative quantities\n";
+                osCond << "rel_residual_norm_r_over_b " << normR/normB << '\n';
+                osCond << "rel_residual_norm_r_over_Ax " << normR/normAx << '\n';
+                osCond << '\n';
+
+                osCond << "# Error bound (upper bound on relative error)\n";
+                osCond << "# |e|/|x_true| <= kappa * |r|/|b|\n";
+                osCond << "error_bound_gershgorin " << kappaGershgorin * normR/normB << '\n';
+
+                Info<< "Condition number evaluation: "
+                    << "kappa_gershgorin=" << kappaGershgorin
+                    << ", lambda_max_power=" << lambdaMaxPower
+                    << ", |r|/|b|=" << normR/normB
+                    << ", error_bound=" << kappaGershgorin * normR/normB
+                    << nl;
+            }
         }
         ///============
 

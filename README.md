@@ -96,6 +96,7 @@ solvers
 | `x_<time>_rank<proc>.dat` | 解ベクトル（圧力値） |
 | `rTrue_<time>_rank<proc>.dat` | 残差ベクトル |
 | `divPhi_<time>_rank<proc>.dat` | フラックスの発散 |
+| `conditionEval_<time>_rank<proc>.dat` | 条件数評価用データ |
 
 ### pEqnファイルの構造
 
@@ -132,6 +133,100 @@ solvers
 - `||r||/||b||`: 右辺ベクトルに対する相対残差
 - `||r||/||Ax||`: 解ベクトルに対する相対残差
 
+## 条件数評価
+
+GNNで圧力を予測する際、予測誤差と残差の関係を評価するためのデータを出力します。
+
+### 理論的背景
+
+係数行列を A、真の解を x_true、予測値を x_pred とすると：
+
+- 誤差: `e = x_pred - x_true`
+- 残差: `r = A*x_pred - b = A*e`
+
+このとき、以下の不等式が成り立ちます：
+
+```
+|e|_2 / |x_true|_2 <= kappa(A) * |r|_2 / |b|_2
+```
+
+ここで `kappa(A)` は行列Aの条件数です。
+
+### 条件数の意味
+
+1. **残差が小さくても条件数が大きいと解誤差は保証されない**
+   - `|r|/|b| << 1` でも、`kappa(A)` が大きければ `|e|/|x_true| << 1` とは言えない
+
+2. **条件数が小さい行列では残差最小化が解誤差最小化と整合する**
+   - `kappa(A)` が O(1) のように小さければ、誤差は残差の定数倍で抑えられる
+
+### conditionEvalファイルの構造
+
+`conditionEval_<time>_rank<proc>.dat` には以下の情報が含まれます：
+
+```
+# Gershgorin bounds (eigenvalue estimates)
+lambda_min_gershgorin    # 最小固有値の下界（ゲルシュゴリン推定）
+lambda_max_gershgorin    # 最大固有値の上界（ゲルシュゴリン推定）
+kappa_gershgorin         # 条件数の上界
+
+# Power iteration estimate (max eigenvalue)
+lambda_max_power         # べき乗法による最大固有値推定
+
+# Diagonal scaling info
+diag_min                 # 対角成分の最小値
+diag_max                 # 対角成分の最大値
+diag_ratio               # 対角成分の比（スケーリング指標）
+
+# Norms for error bound evaluation
+norm_b                   # |b|_2 (右辺ベクトルのノルム)
+norm_x_true              # |x_true|_2 (真の解のノルム)
+norm_r                   # |r|_2 (残差のノルム)
+max_abs_r                # max|r_i| (最大残差)
+
+# Relative quantities
+rel_residual_norm_r_over_b    # |r|/|b| (相対残差)
+rel_residual_norm_r_over_Ax   # |r|/|Ax|
+
+# Error bound
+error_bound_gershgorin   # kappa * |r|/|b| (誤差の上界)
+```
+
+### 推定手法
+
+| 手法 | 説明 | 用途 |
+|------|------|------|
+| ゲルシュゴリンの円定理 | 対角成分と非対角成分から固有値の範囲を推定 | 条件数の上界（保守的） |
+| べき乗法 | 反復計算により最大固有値を推定 | より正確な最大固有値 |
+| 対角比 | 対角成分の最大/最小比 | 対角スケーリングの必要性判断 |
+
+### GNN予測の評価への活用
+
+出力されたデータを使って、GNNの予測精度を評価できます：
+
+```python
+# 例：Pythonでの評価
+import numpy as np
+
+# conditionEval ファイルから読み込み
+kappa = ...           # kappa_gershgorin
+norm_b = ...          # norm_b
+norm_x_true = ...     # norm_x_true
+
+# GNN予測値 x_pred と行列A、右辺ベクトルbから
+r_pred = A @ x_pred - b
+norm_r_pred = np.linalg.norm(r_pred)
+
+# 誤差の上界
+error_bound = kappa * (norm_r_pred / norm_b)
+print(f"Relative error <= {error_bound}")
+
+# 実際の誤差（真値がある場合）
+e = x_pred - x_true
+actual_rel_error = np.linalg.norm(e) / norm_x_true
+print(f"Actual relative error = {actual_rel_error}")
+```
+
 ## 並列計算
 
 MPI並列計算に対応しています。各プロセスは自身のランク番号を含むファイル名でデータを出力します。グローバルな統計情報はマスタープロセスから報告されます。
@@ -159,6 +254,7 @@ mpirun -np 4 pisoFoam_time -parallel
 - CSR形式での行列出力機能
 - セル毎のクーラン数計算
 - 残差ベクトルの出力機能
+- 条件数評価データの出力機能
 - 並列対応のデータ出力
 
 ## ライセンス

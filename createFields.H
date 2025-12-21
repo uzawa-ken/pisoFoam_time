@@ -32,6 +32,11 @@ volVectorField U
 label pRefCell = 0;
 scalar pRefValue = 10000.0;
 setRefCell(p, piso.dict(), pRefCell, pRefValue);
+
+// 圧力参照値を強制的に10000に設定（ゲージ自由性の適切な設定のため）
+// fvSolutionで上書きされた場合でも10000を使用
+pRefValue = 10000.0;
+
 mesh.setFluxRequired(p.name());
 
 

@@ -30,7 +30,7 @@ volVectorField U
 
 
 label pRefCell = 0;
-scalar pRefValue = 0.0;
+scalar pRefValue = 10000.0;
 setRefCell(p, piso.dict(), pRefCell, pRefValue);
 mesh.setFluxRequired(p.name());
 
